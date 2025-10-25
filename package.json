@@ -1,0 +1,32 @@
+{
+  "name": "recharge-portal",
+  "version": "1.0.0",
+  "description": "<p align=\"center\">   <!-- Replace docs/logo.png with your logo file when you have one -->   <img src=\"docs/logo.png\" alt=\"ReCharge Alaska\" width=\"140\" /> </p>",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p "
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kris-recharge/recharge-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/kris-recharge/recharge-app/issues"
+  },
+  "homepage": "https://github.com/kris-recharge/recharge-app#readme",
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.16"
+  }
+}
