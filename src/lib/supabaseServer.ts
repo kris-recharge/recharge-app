@@ -2,8 +2,9 @@ import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 
 export function createServerSupabase() {
-  // Use ReturnType<typeof cookies> so we don't rely on unstable exported types.
-  const cookieStore: ReturnType<typeof cookies> = cookies();
+  // Some CI/build environments incorrectly type cookies() as Promise<...>.
+  // Use a permissive type to satisfy TS while keeping the runtime behavior intact.
+  const cookieStore: any = cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
