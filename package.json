@@ -24,6 +24,7 @@
     "@supabase/supabase-js": "^2.76.1",
     "exceljs": "^4.4.0",
     "next": "^16.0.0",
+    "pg": "^8.16.3",
     "plotly.js-dist-min": "^3.1.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
