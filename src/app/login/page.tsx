@@ -102,25 +102,10 @@ function LoginPageInner() {
   }, [recoveryHash, supabase]);
 
   // handle password recovery link (?code=...)
+  // Ignore on the login page: recovery comes via hash tokens (#access_token & type=recovery)
   useEffect(() => {
-    (async () => {
-      if (!codeFromLink) return;
-      setLoading(true);
-      setErrorMsg(null);
-      try {
-        const { error } = await supabase.auth.exchangeCodeForSession(codeFromLink);
-        if (error) {
-          setErrorMsg(error.message || 'Could not start password reset.');
-        } else {
-          setView('reset');
-        }
-      } catch (e: any) {
-        setErrorMsg(e?.message ?? 'Could not start password reset.');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [codeFromLink, supabase]);
+    // Intentionally left blank to avoid PKCE exchange here.
+  }, [codeFromLink]);
 
   async function onSubmitLogin(e: React.FormEvent) {
     e.preventDefault();
