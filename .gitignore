@@ -1,0 +1,16 @@
+# Node/Next
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.log
+
+# Env & local
+.env*
+.DS_Store
+
+# OS / editor
+**/.DS_Store
+.vscode/
+.idea/
