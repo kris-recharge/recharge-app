@@ -1,0 +1,5 @@
+# Prevent committing built artifacts and large binaries
+node_modules/**   -diff -merge -text
+.next/**          -diff -merge -text
+out/**            -diff -merge -text
+dist/**           -diff -merge -text
