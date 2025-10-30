@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabaseClient';
 
-export default function AuthCallback() {
+// Ensure this page is rendered dynamically and not prerendered
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+function CallbackWorker() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [msg, setMsg] = useState('Finishing sign-in…');
@@ -17,7 +21,7 @@ export default function AuthCallback() {
         // --- Case A: PKCE code flow ?code=... ---
         const code = searchParams.get('code');
         if (code) {
-          // This exchanges the auth code (and the stored code_verifier cookie) for a session
+          // Exchange the auth code (with stored code_verifier cookie) for a session
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) throw error;
 
@@ -63,5 +67,26 @@ export default function AuthCallback() {
     >
       {msg}
     </main>
+  );
+}
+
+export default function AuthCallback() {
+  return (
+    <Suspense
+      fallback={
+        <main
+          style={{
+            minHeight: '100vh',
+            display: 'grid',
+            placeItems: 'center',
+            color: '#94a3b8',
+          }}
+        >
+          Processing…
+        </main>
+      }
+    >
+      <CallbackWorker />
+    </Suspense>
   );
 }
