@@ -165,13 +165,18 @@ export default function LoginPage() {
       setErrorMsg('Missing MFA factor.');
       return;
     }
+    if (!mfaChallengeId) {
+      setErrorMsg('MFA challenge missing or expired. Please sign in again to start a new challenge.');
+      return;
+    }
+
     setErrorMsg(null);
     setLoading(true);
 
     const verifyRes = await supabase.auth.mfa.verify({
       factorId: mfaFactorId,
       code: mfaCode.trim(),
-      challengeId: mfaChallengeId ?? undefined,
+      challengeId: mfaChallengeId, // required and guaranteed non-null above
     });
 
     if (verifyRes.error) {
