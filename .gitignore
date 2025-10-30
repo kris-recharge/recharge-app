@@ -14,3 +14,19 @@ coverage/
 **/.DS_Store
 .vscode/
 .idea/
+# Node/Next
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.log
+
+# Env & local
+.env*
+.DS_Store
+
+# Editors / OS
+**/.DS_Store
+.vscode/
+.idea/
