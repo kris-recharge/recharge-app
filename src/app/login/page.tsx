@@ -51,11 +51,22 @@ function LoginPageInner() {
     };
   }, [searchParams]);
 
-  // redirect if already logged in
+  // redirect if already logged in (skip if in recovery/invite flow)
   useEffect(() => {
     (async () => {
+      const url = new URL(window.location.href);
+      const hasHashToken = !!url.hash && /access_token|type=recovery/.test(url.hash);
+      const hasCodeParam = url.searchParams.has('code');
+
+      if (hasHashToken || hasCodeParam) {
+        // Stay on this page to complete recovery flow
+        return;
+      }
+
       const { data } = await supabase.auth.getSession();
-      if (data.session) router.replace('/app');
+      if (data?.session) {
+        router.replace('/app');
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
