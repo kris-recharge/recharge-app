@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 
 /**
  * Reset Password with optional TOTP enforcement:
@@ -11,7 +11,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
  */
 export default function ResetPassword() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
 
   const [pwd, setPwd] = useState('');
@@ -47,8 +46,10 @@ export default function ResetPassword() {
         // 1) Already signed in?
         const { data: s1 } = await supabase.auth.getSession();
         if (!s1.session) {
-          // 2) Try PKCE code
-          const code = searchParams.get('code');
+          // 2) Try PKCE code (read from window.location to avoid useSearchParams SSR constraint)
+          const code = typeof window !== 'undefined'
+            ? new URL(window.location.href).searchParams.get('code')
+            : null;
           if (code) {
             const { error } = await supabase.auth.exchangeCodeForSession(code);
             if (!error) {
@@ -102,7 +103,7 @@ export default function ResetPassword() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, []);
 
   // Start a challenge for TOTP if needed and not already started
   const ensureMfaChallenge = async () => {
