@@ -1,28 +1,98 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
+/**
+ * Reset Password
+ * - Accepts both Supabase recovery link formats:
+ *   1) PKCE query param:   /reset-password?code=...
+ *   2) Hash tokens:        /reset-password#type=recovery&access_token=...&refresh_token=...
+ * - If no active session, we try to establish one from the URL before showing the form.
+ */
 export default function ResetPassword() {
   const router = useRouter();
-  const supabase = createClient();
+  const searchParams = useSearchParams();
+  const supabase = useMemo(() => createClient(), []);
 
   const [pwd, setPwd] = useState('');
   const [pwd2, setPwd2] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
 
-  // Require an authenticated session (recovery link should have created one)
+  // Try to ensure an authenticated session exists for the reset flow
   useEffect(() => {
+    let cancelled = false;
+
+    const parseHashParams = () => {
+      const hash = typeof window !== 'undefined' ? window.location.hash : '';
+      const out: Record<string, string> = {};
+      if (hash && hash.startsWith('#')) {
+        const pairs = hash.slice(1).split('&');
+        for (const p of pairs) {
+          const [k, v] = p.split('=');
+          if (k) out[decodeURIComponent(k)] = decodeURIComponent(v ?? '');
+        }
+      }
+      return out;
+    };
+
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
-        router.replace('/login');
+      try {
+        // 1) If session already exists, we're good.
+        const { data: s1 } = await supabase.auth.getSession();
+        if (s1.session) {
+          if (!cancelled) setChecking(false);
+          return;
+        }
+
+        // 2) If we have a PKCE "code" param, exchange it.
+        const code = searchParams.get('code');
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (!error) {
+            if (!cancelled) setChecking(false);
+            // Clean the URL (remove the code so it can't be reused)
+            window.history.replaceState({}, '', '/reset-password');
+            return;
+          }
+        }
+
+        // 3) If we have hash tokens (access_token/refresh_token) from #type=recovery, set session.
+        const hashParams = parseHashParams();
+        if (hashParams['type'] === 'recovery' && hashParams['access_token'] && hashParams['refresh_token']) {
+          const { error } = await supabase.auth.setSession({
+            access_token: hashParams['access_token'],
+            refresh_token: hashParams['refresh_token'],
+          });
+          if (!error) {
+            if (!cancelled) setChecking(false);
+            // Clean the URL (drop hash)
+            window.history.replaceState({}, '', '/reset-password');
+            return;
+          }
+        }
+
+        // 4) Final check—if still no session, bounce to login.
+        const { data: s2 } = await supabase.auth.getSession();
+        if (!s2.session) {
+          router.replace('/login?error=recovery_session_missing');
+          return;
+        }
+        if (!cancelled) setChecking(false);
+      } catch (e) {
+        console.error('ResetPassword init error:', e);
+        router.replace('/login?error=recovery_init_failed');
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,9 +117,29 @@ export default function ResetPassword() {
     }
 
     setMsg('✅ Password updated. Redirecting…');
-    // You can change this to /app if that’s your desired landing page
-    setTimeout(() => router.replace('/login'), 1200);
+    // Optional: sign out to force fresh login with new password.
+    setTimeout(async () => {
+      await supabase.auth.signOut();
+      router.replace('/login?pwreset=1');
+    }, 1000);
   };
+
+  if (checking) {
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          background: '#0b1220',
+          color: 'white',
+          padding: '2rem',
+        }}
+      >
+        <div style={{ opacity: 0.8 }}>Preparing password reset…</div>
+      </main>
+    );
+  }
 
   return (
     <main

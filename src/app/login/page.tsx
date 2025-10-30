@@ -33,6 +33,7 @@ function LoginPageInner() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const codeFromLink = useMemo(() => searchParams?.get('code') ?? null, [searchParams]);
+  const modeParam = useMemo(() => searchParams?.get('mode') ?? null, [searchParams]);
 
   // Handle links that come as URL hash from Supabase (e.g. #access_token=...&refresh_token=...&type=recovery)
   const recoveryHash = useMemo(() => {
@@ -50,6 +51,48 @@ function LoginPageInner() {
       type: string | null;
     };
   }, [searchParams]);
+
+  // If Supabase directs recovery traffic to /login, forward it to /auth/callback
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    const hasCode = url.searchParams.has('code');
+    const hash = url.hash || '';
+    const isRecoveryHash = /(^#|&)type=recovery/.test(hash) && /access_token=/.test(hash) && /refresh_token=/.test(hash);
+
+    if (hasCode) {
+      // Preserve the original query string when forwarding to the callback
+      const qs = url.searchParams.toString();
+      router.replace(`/auth/callback${qs ? `?${qs}` : ''}`);
+      return;
+    }
+
+    if (isRecoveryHash) {
+      // Preserve the entire hash for the callback to process
+      router.replace(`/auth/callback${hash}`);
+      return;
+    }
+  }, [searchParams]);
+
+  // If Supabase directs recovery traffic to /login, forward it to /auth/callback
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    const hasCode = url.searchParams.has('code');
+    const hash = url.hash || '';
+    const isRecoveryHash = /(^#|&)type=recovery/.test(hash) && /access_token=/.test(hash) && /refresh_token=/.test(hash);
+
+    if (hasCode) {
+      const qs = url.searchParams.toString();
+      router.replace(`/auth/callback${qs ? `?${qs}` : ''}`);
+      return;
+    }
+
+    if (isRecoveryHash) {
+      router.replace(`/auth/callback${hash}`);
+      return;
+    }
+  }, [searchParams, router]);
 
   // redirect if already logged in (skip if in recovery/invite flow)
   useEffect(() => {
@@ -106,6 +149,16 @@ function LoginPageInner() {
   useEffect(() => {
     // Intentionally left blank to avoid PKCE exchange here.
   }, [codeFromLink]);
+
+  useEffect(() => {
+    if (modeParam === 'reset') {
+      setView('reset');
+      // Clean the mode flag from the URL
+      const url = new URL(window.location.href);
+      url.searchParams.delete('mode');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [modeParam]);
 
   async function onSubmitLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -194,7 +247,7 @@ function LoginPageInner() {
     }
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${window.location.origin}/auth/callback?from=recovery`,
       });
       if (error) setErrorMsg(error.message);
       else setErrorMsg('Password reset email sent. Check your inbox.');
