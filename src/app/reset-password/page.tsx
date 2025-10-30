@@ -1,15 +1,15 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 /**
- * Reset Password with optional TOTP verification
- * - Accepts both recovery URL formats (PKCE ?code= and hash #access_token=...)
- * - If the user has a verified TOTP factor, require a 6-digit code before updating.
+ * Reset Password with optional TOTP enforcement:
+ * - Establishes a session from PKCE (?code=...) or hash (#type=recovery&access_token=...)
+ * - If user has a verified TOTP factor, require a 6-digit code before updating password
  */
-function ResetPasswordInner() {
+export default function ResetPassword() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
@@ -21,13 +21,12 @@ function ResetPasswordInner() {
   const [checking, setChecking] = useState(true);
 
   // MFA state
-  const [hasTotp, setHasTotp] = useState(false);
-  const [factorId, setFactorId] = useState<string | null>(null);
-  const [otp, setOtp] = useState('');
-  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [needsMfa, setNeedsMfa] = useState(false);
+  const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
+  const [mfaChallengeId, setMfaChallengeId] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
 
-  // Try to ensure an authenticated session exists for the reset flow,
-  // then discover if the user has a verified TOTP factor.
+  // Ensure we have a session (PKCE or hash) and detect whether TOTP is enrolled & verified
   useEffect(() => {
     let cancelled = false;
 
@@ -35,8 +34,7 @@ function ResetPasswordInner() {
       const hash = typeof window !== 'undefined' ? window.location.hash : '';
       const out: Record<string, string> = {};
       if (hash && hash.startsWith('#')) {
-        const pairs = hash.slice(1).split('&');
-        for (const p of pairs) {
+        for (const p of hash.slice(1).split('&')) {
           const [k, v] = p.split('=');
           if (k) out[decodeURIComponent(k)] = decodeURIComponent(v ?? '');
         }
@@ -46,51 +44,57 @@ function ResetPasswordInner() {
 
     (async () => {
       try {
-        // 1) If session already exists, continue
-        let { data: s1 } = await supabase.auth.getSession();
+        // 1) Already signed in?
+        const { data: s1 } = await supabase.auth.getSession();
         if (!s1.session) {
-          // 2) Try PKCE exchange
+          // 2) Try PKCE code
           const code = searchParams.get('code');
           if (code) {
-            await supabase.auth.exchangeCodeForSession(code);
-            ({ data: s1 } = await supabase.auth.getSession());
-          }
-        }
-        if (!s1.session) {
-          // 3) Try hash tokens (type=recovery)
-          const hashParams = parseHashParams();
-          if (hashParams['type'] === 'recovery' && hashParams['access_token'] && hashParams['refresh_token']) {
-            await supabase.auth.setSession({
-              access_token: hashParams['access_token'],
-              refresh_token: hashParams['refresh_token'],
-            });
-            window.history.replaceState({}, '', '/reset-password');
+            const { error } = await supabase.auth.exchangeCodeForSession(code);
+            if (!error) {
+              window.history.replaceState({}, '', '/reset-password');
+            }
+          } else {
+            // 3) Try hash tokens from #type=recovery
+            const hashParams = parseHashParams();
+            if (
+              hashParams['type'] === 'recovery' &&
+              hashParams['access_token'] &&
+              hashParams['refresh_token']
+            ) {
+              const { error } = await supabase.auth.setSession({
+                access_token: hashParams['access_token'],
+                refresh_token: hashParams['refresh_token'],
+              });
+              if (!error) {
+                window.history.replaceState({}, '', '/reset-password');
+              }
+            }
           }
         }
 
-        // 4) Final check
+        // 4) Final check—if still no session, bounce to login
         const { data: s2 } = await supabase.auth.getSession();
         if (!s2.session) {
-          router.replace('/login?error=recovery_session_missing');
+          if (!cancelled) router.replace('/login?error=recovery_session_missing');
           return;
         }
 
-        // 5) Discover verified TOTP factor
-        const { data: factors, error } = await supabase.auth.mfa.listFactors();
-        if (!error && factors?.all?.length) {
-          const totp = factors.all.find(
-            (f) => f.factor_type === 'totp' && f.status === 'verified'
-          );
-          if (totp) {
-            setHasTotp(true);
-            setFactorId(totp.id);
+        // 5) Detect verified TOTP factor
+        const { data: factorsData, error: factorsErr } =
+          await supabase.auth.mfa.listFactors();
+        if (!factorsErr && factorsData?.totp?.length) {
+          const verifiedTotp = factorsData.totp.find((f) => f.status === 'verified');
+          if (verifiedTotp) {
+            setNeedsMfa(true);
+            setMfaFactorId(verifiedTotp.id);
           }
         }
 
         if (!cancelled) setChecking(false);
       } catch (e) {
         console.error('ResetPassword init error:', e);
-        router.replace('/login?error=recovery_init_failed');
+        if (!cancelled) router.replace('/login?error=recovery_init_failed');
       }
     })();
 
@@ -100,42 +104,38 @@ function ResetPasswordInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  const requireStrongPwd = () => pwd.length >= 8;
+  // Start a challenge for TOTP if needed and not already started
+  const ensureMfaChallenge = async () => {
+    if (!needsMfa || !mfaFactorId) return;
+    if (mfaChallengeId) return;
 
-  const ensureMfaVerified = async () => {
-    if (!hasTotp) return true;                // no TOTP enrolled
-    if (!factorId) return false;
+    const { data, error } = await supabase.auth.mfa.challenge({ factorId: mfaFactorId });
+    if (error) {
+      setMsg(`MFA error: ${error.message}`);
+      return;
+    }
+    setMfaChallengeId(data.id);
+    setMsg('Enter the 6-digit code from your authenticator app to continue.');
+  };
 
-    // Require user to enter the code
-    if (!otp || otp.trim().length < 6) {
-      setMsg('Enter the 6-digit code from your authenticator.');
+  const verifyMfaIfNeeded = async (): Promise<boolean> => {
+    if (!needsMfa) return true; // not needed
+    // Start challenge if we don't have one yet
+    if (!mfaChallengeId) {
+      await ensureMfaChallenge();
+      return false; // show code field
+    }
+    if (!mfaCode || mfaCode.trim().length === 0) {
+      setMsg('Please enter the 6-digit code from your authenticator app.');
       return false;
     }
-
-    // Start challenge if we don't have one
-    let cid = challengeId;
-    if (!cid) {
-      const { data, error } = await supabase.auth.mfa.challenge({ factorId });
-      if (error) {
-        setMsg(error.message);
-        return false;
-      }
-      cid = data?.id ?? null;
-      setChallengeId(cid);
-      if (!cid) {
-        setMsg('Unable to start MFA challenge.');
-        return false;
-      }
-    }
-
-    // Verify code
-    const verify = await supabase.auth.mfa.verify({
-      factorId,
-      challengeId: cid,
-      code: otp.trim(),
+    const { error } = await supabase.auth.mfa.verify({
+      factorId: mfaFactorId as string,
+      challengeId: mfaChallengeId,
+      code: mfaCode.trim(),
     });
-    if (verify.error) {
-      setMsg(verify.error.message || 'Invalid authentication code.');
+    if (error) {
+      setMsg(`MFA verify failed: ${error.message}`);
       return false;
     }
     return true;
@@ -145,7 +145,7 @@ function ResetPasswordInner() {
     e.preventDefault();
     setMsg(null);
 
-    if (!requireStrongPwd()) {
+    if (pwd.length < 8) {
       setMsg('Password must be at least 8 characters.');
       return;
     }
@@ -154,9 +154,9 @@ function ResetPasswordInner() {
       return;
     }
 
-    // If TOTP is enrolled, enforce verification first
-    const ok = await ensureMfaVerified();
-    if (!ok) return;
+    // Enforce MFA first (if applicable)
+    const okToProceed = await verifyMfaIfNeeded();
+    if (!okToProceed) return;
 
     setSaving(true);
     const { error } = await supabase.auth.updateUser({ password: pwd });
@@ -171,37 +171,107 @@ function ResetPasswordInner() {
     setTimeout(async () => {
       await supabase.auth.signOut();
       router.replace('/login?pwreset=1');
-    }, 900);
+    }, 1000);
   };
 
   if (checking) {
     return (
-      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1220', color: 'white', padding: '2rem' }}>
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          background: '#0b1220',
+          color: 'white',
+          padding: '2rem',
+        }}
+      >
         <div style={{ opacity: 0.8 }}>Preparing password reset…</div>
       </main>
     );
   }
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1220', color: 'white', padding: '2rem' }}>
-      <div style={{ width: '100%', maxWidth: 440, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(148,163,184,0.15)', borderRadius: 12, padding: 24 }}>
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        placeItems: 'center',
+        background: '#0b1220',
+        color: 'white',
+        padding: '2rem',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 440,
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(148,163,184,0.15)',
+          borderRadius: 12,
+          padding: 24,
+        }}
+      >
         <h1 style={{ fontSize: 22, marginBottom: 16 }}>Set a new password</h1>
 
         {msg && (
-          <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(148,163,184,0.12)', borderRadius: 8, fontSize: 14 }}>
+          <div
+            style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              background: 'rgba(148,163,184,0.12)',
+              borderRadius: 8,
+              fontSize: 14,
+            }}
+          >
             {msg}
           </div>
         )}
 
         <form onSubmit={onSubmit}>
+          {/* If TOTP is required, show the code field first */}
+          {needsMfa && (
+            <>
+              <label style={{ display: 'block', fontSize: 14, marginBottom: 6 }}>
+                6-digit authenticator code
+              </label>
+              <input
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                placeholder="••••••"
+                onFocus={ensureMfaChallenge}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(148,163,184,0.25)',
+                  background: 'rgba(255,255,255,0.05)',
+                  color: 'white',
+                  marginBottom: 16,
+                  letterSpacing: 2,
+                }}
+              />
+            </>
+          )}
+
           <label style={{ display: 'block', fontSize: 14, marginBottom: 6 }}>New password</label>
           <input
             type="password"
             value={pwd}
             onChange={(e) => setPwd(e.target.value)}
             placeholder="••••••••"
-            autoComplete="new-password"
-            style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(255,255,255,0.05)', color: 'white', marginBottom: 12 }}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(148,163,184,0.25)',
+              background: 'rgba(255,255,255,0.05)',
+              color: 'white',
+              marginBottom: 12,
+            }}
           />
 
           <label style={{ display: 'block', fontSize: 14, marginBottom: 6 }}>Confirm password</label>
@@ -210,47 +280,34 @@ function ResetPasswordInner() {
             value={pwd2}
             onChange={(e) => setPwd2(e.target.value)}
             placeholder="••••••••"
-            autoComplete="new-password"
-            style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(255,255,255,0.05)', color: 'white', marginBottom: hasTotp ? 12 : 16 }}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(148,163,184,0.25)',
+              background: 'rgba(255,255,255,0.05)',
+              color: 'white',
+              marginBottom: 16,
+            }}
           />
-
-          {hasTotp && (
-            <>
-              <label style={{ display: 'block', fontSize: 14, marginBottom: 6 }}>Authenticator code</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D+/g, '').slice(0, 6))}
-                placeholder="6-digit code"
-                autoComplete="one-time-code"
-                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(255,255,255,0.05)', color: 'white', marginBottom: 16, letterSpacing: 2 }}
-              />
-            </>
-          )}
 
           <button
             type="submit"
             disabled={saving}
-            style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.5)', background: saving ? 'rgba(99,102,241,0.35)' : '#1d4ed8', color: 'white', fontWeight: 600 }}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(99,102,241,0.5)',
+              background: saving ? 'rgba(99,102,241,0.35)' : '#1d4ed8',
+              color: 'white',
+              fontWeight: 600,
+            }}
           >
-            {saving ? 'Saving…' : 'Update password'}
+            {saving ? 'Saving…' : needsMfa ? 'Verify & update password' : 'Update password'}
           </button>
         </form>
       </div>
     </main>
-  );
-}
-
-export default function ResetPassword() {
-  return (
-    <Suspense fallback={
-      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1220', color: 'white', padding: '2rem' }}>
-        <div style={{ opacity: 0.8 }}>Preparing password reset…</div>
-      </main>
-    }>
-      <ResetPasswordInner />
-    </Suspense>
   );
 }
