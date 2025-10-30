@@ -1,92 +1,54 @@
-'use client';
-
-import { useEffect, useState, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { createClient } from '@/lib/supabaseClient';
-
-// Ensure this page is rendered dynamically and not prerendered
+// Server component: handle Supabase OAuth/recovery callback and bounce to the right screen
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-function CallbackWorker() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const [msg, setMsg] = useState('Finishing sign-in…');
-
-  useEffect(() => {
-    const supabase = createClient();
-
-    (async () => {
-      try {
-        // --- Case A: PKCE code flow ?code=... ---
-        const code = searchParams.get('code');
-        if (code) {
-          // Exchange the auth code (with stored code_verifier cookie) for a session
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
-
-          router.replace('/reset-password');
-          return;
-        }
-
-        // --- Case B: Hash-based recovery flow #access_token=...&refresh_token=...&type=recovery ---
-        if (typeof window !== 'undefined' && window.location.hash.startsWith('#')) {
-          const hash = new URLSearchParams(window.location.hash.substring(1));
-          const type = hash.get('type');
-          const access_token = hash.get('access_token');
-          const refresh_token = hash.get('refresh_token');
-
-          if (type === 'recovery' && access_token && refresh_token) {
-            const { error } = await supabase.auth.setSession({ access_token, refresh_token });
-            if (error) throw error;
-
-            router.replace('/reset-password');
-            return;
-          }
-        }
-
-        // Nothing we can process: send back to login
-        router.replace('/login');
-      } catch (err: any) {
-        console.error(err);
-        setMsg(err?.message || 'Something went wrong. Redirecting…');
-        setTimeout(() => router.replace('/login'), 1500);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        color: '#94a3b8',
-      }}
-    >
-      {msg}
-    </main>
-  );
-}
+export const revalidate = 0; // ok on server components
 
 export default function AuthCallback() {
-  return (
-    <Suspense
-      fallback={
-        <main
-          style={{
-            minHeight: '100vh',
-            display: 'grid',
-            placeItems: 'center',
-            color: '#94a3b8',
-          }}
-        >
-          Processing…
-        </main>
+  const pageStyle: React.CSSProperties = {
+    minHeight: '100vh',
+    display: 'grid',
+    placeItems: 'center',
+    color: '#94a3b8',
+  };
+
+  // We purposely do *not* use hooks here. This page renders on the server,
+  // and then the inline script runs in the browser to parse URL params/hash
+  // and redirect to the appropriate flow.
+  const script = `(() => {
+    try {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get('code');
+      if (code) {
+        // PKCE flow -> let the reset page complete the exchange via Supabase API
+        window.location.replace('/reset-password?code=' + encodeURIComponent(code));
+        return;
       }
-    >
-      <CallbackWorker />
-    </Suspense>
+
+      // Hash-based recovery: #access_token=...&refresh_token=...&type=recovery
+      if (url.hash && url.hash.startsWith('#')) {
+        const hash = new URLSearchParams(url.hash.substring(1));
+        const type = hash.get('type');
+        const at = hash.get('access_token');
+        const rt = hash.get('refresh_token');
+        if (type === 'recovery' && at && rt) {
+          // hand tokens to the reset page via hash
+          const nextHash = new URLSearchParams({ type: 'recovery', access_token: at, refresh_token: rt }).toString();
+          window.location.replace('/reset-password#' + nextHash);
+          return;
+        }
+      }
+
+      // Fallback: go back to login
+      window.location.replace('/login');
+    } catch (e) {
+      console.error(e);
+      window.location.replace('/login');
+    }
+  })();`;
+
+  return (
+    <main style={pageStyle}>
+      Processing…
+      <script dangerouslySetInnerHTML={{ __html: script }} />
+    </main>
   );
 }
