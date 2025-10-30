@@ -8,6 +8,7 @@ export default function SecurityPage() {
   const supabase = createClient();
   const [enrolled, setEnrolled] = useState(false);
   const [factorId, setFactorId] = useState<string | null>(null);
+  const [challengeId, setChallengeId] = useState<string | null>(null);
   const [otpUri, setOtpUri] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
@@ -32,11 +33,16 @@ export default function SecurityPage() {
     setMsg(null);
     setBusy(true);
     try {
-      // Enroll a TOTP factor. Supabase expects camelCase input here.
-      const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' });
-      if (error) throw error;
-      setFactorId(data.id);
-      setOtpUri(data.totp?.uri ?? null);
+      // 1) Enroll a TOTP factor. Supabase expects camelCase input here.
+      const { data: enrollData, error: enrollErr } = await supabase.auth.mfa.enroll({ factorType: 'totp' });
+      if (enrollErr) throw enrollErr;
+      setFactorId(enrollData.id);
+      setOtpUri(enrollData.totp?.uri ?? null);
+
+      // 2) Create a challenge for this factor; challengeId is required by verify()
+      const { data: challengeData, error: challengeErr } = await supabase.auth.mfa.challenge({ factorId: enrollData.id });
+      if (challengeErr) throw challengeErr;
+      setChallengeId(challengeData.id);
     } catch (e: any) {
       setMsg(e?.message ?? 'Could not start TOTP enrollment.');
     } finally {
@@ -45,12 +51,15 @@ export default function SecurityPage() {
   }
 
   async function verify() {
-    if (!factorId) return;
+    if (!factorId || !challengeId) {
+      setMsg('Missing challenge. Click “Set up Authenticator” again.');
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
-      // For TOTP verify during enrollment, factorId + code is sufficient.
-      const { error } = await supabase.auth.mfa.verify({ factorId, code: code.trim() });
+      // Verify requires factorId, challengeId, and the 6-digit code
+      const { error } = await supabase.auth.mfa.verify({ factorId, challengeId, code: code.trim() });
       if (error) throw error;
       setMsg('✅ Authenticator added.');
       setEnrolled(true);
@@ -92,7 +101,7 @@ export default function SecurityPage() {
                 placeholder="123456"
                 inputMode="numeric"
                 maxLength={6}
-                pattern="\d*"
+                pattern="\\d*"
                 style={{ width: '100%', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 12px' }}
               />
               <button
