@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabaseClient';
 import { useRouter, useSearchParams } from 'next/navigation';
 
@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
  *   2) Hash tokens:        /reset-password#type=recovery&access_token=...&refresh_token=...
  * - If no active session, we try to establish one from the URL before showing the form.
  */
-export default function ResetPassword() {
+function ResetPasswordInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
@@ -231,5 +231,17 @@ export default function ResetPassword() {
         </form>
       </div>
     </main>
+  );
+}
+
+export default function ResetPassword() {
+  return (
+    <Suspense fallback={
+      <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#0b1220', color: 'white', padding: '2rem' }}>
+        <div style={{ opacity: 0.8 }}>Loading…</div>
+      </main>
+    }>
+      <ResetPasswordInner />
+    </Suspense>
   );
 }
