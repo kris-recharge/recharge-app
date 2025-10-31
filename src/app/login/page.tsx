@@ -34,6 +34,7 @@ function LoginPageInner() {
 
   const codeFromLink = useMemo(() => searchParams?.get('code') ?? null, [searchParams]);
   const modeParam = useMemo(() => searchParams?.get('mode') ?? null, [searchParams]);
+  const pwUpdatedFlag = useMemo(() => searchParams?.get('pw_updated') === '1', [searchParams]);
 
   // Handle links that come as URL hash from Supabase (e.g. #access_token=...&refresh_token=...&type=recovery)
   const recoveryHash = useMemo(() => {
@@ -176,12 +177,7 @@ function LoginPageInner() {
       return;
     }
 
-    if (data.session) {
-      router.replace('/app');
-      setLoading(false);
-      return;
-    }
-
+    // If the user has a TOTP factor enrolled, require MFA on every login.
     const factorsRes = await supabase.auth.mfa.listFactors();
     if (factorsRes.error) {
       setErrorMsg(factorsRes.error.message || 'Unable to load MFA factors.');
@@ -190,23 +186,24 @@ function LoginPageInner() {
     }
 
     const totp = factorsRes.data.totp?.[0];
-    if (!totp?.id) {
-      setErrorMsg('MFA is required but no TOTP factor is enrolled for this account.');
+    if (totp?.id) {
+      const challengeRes = await supabase.auth.mfa.challenge({ factorId: totp.id });
+      if (challengeRes.error) {
+        setErrorMsg(challengeRes.error.message || 'Could not start MFA challenge.');
+        setLoading(false);
+        return;
+      }
+      setMfaFactorId(totp.id);
+      setMfaChallengeId(challengeRes.data?.id ?? null);
+      setView('mfa');
       setLoading(false);
       return;
     }
 
-    const challengeRes = await supabase.auth.mfa.challenge({ factorId: totp.id });
-    if (challengeRes.error) {
-      setErrorMsg(challengeRes.error.message || 'Could not start MFA challenge.');
-      setLoading(false);
-      return;
-    }
-
-    setMfaFactorId(totp.id);
-    setMfaChallengeId(challengeRes.data?.id ?? null);
-    setView('mfa');
+    // No TOTP factor — proceed directly
+    router.replace('/app');
     setLoading(false);
+    return;
   }
 
   async function onSubmitMfa(e: React.FormEvent) {
@@ -281,9 +278,10 @@ function LoginPageInner() {
         window.history.replaceState({}, '', url.toString());
         setNewPw('');
         setConfirmPw('');
-        setErrorMsg('Password updated. Redirecting…');
-        // Recovery/invite flows yield a valid session; go straight to the app.
-        setTimeout(() => router.replace('/app'), 600);
+        setErrorMsg('Password updated. Please sign in again.');
+        // End the current session so the next login will trigger MFA.
+        await supabase.auth.signOut();
+        setTimeout(() => router.replace('/login?pw_updated=1'), 400);
       }
     } catch (err: any) {
       setErrorMsg(err?.message ?? 'Could not update password.');
@@ -323,6 +321,22 @@ function LoginPageInner() {
           />
         </div>
 
+        {pwUpdatedFlag && view === 'login' && (
+          <div
+            role="status"
+            style={{
+              background: '#ecfdf5',
+              color: '#065f46',
+              border: '1px solid #a7f3d0',
+              borderRadius: 8,
+              padding: '10px 12px',
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
+            Password updated. Please sign in with your new password.
+          </div>
+        )}
         {view === 'login' && (
           <h1 style={{ fontSize: 20, fontWeight: 600, textAlign: 'center', marginBottom: 12, color: '#0b1830' }}>
             Sign in
