@@ -185,7 +185,9 @@ function LoginPageInner() {
       return;
     }
 
-    const totp = factorsRes.data.totp?.[0];
+    const totp =
+      factorsRes.data.totp?.find((f) => f.status === 'verified') ??
+      factorsRes.data.totp?.[0];
     if (totp?.id) {
       const challengeRes = await supabase.auth.mfa.challenge({ factorId: totp.id });
       if (challengeRes.error) {
@@ -220,10 +222,17 @@ function LoginPageInner() {
     setErrorMsg(null);
     setLoading(true);
 
+    const code = mfaCode.replace(/\D/g, '').slice(0, 6);
+    if (code.length !== 6) {
+      setErrorMsg('Enter the 6-digit code from your authenticator.');
+      setLoading(false);
+      return;
+    }
+
     const verifyRes = await supabase.auth.mfa.verify({
       factorId: mfaFactorId,
-      code: mfaCode.trim(),
       challengeId: mfaChallengeId, // required and guaranteed non-null above
+      code,
     });
 
     if (verifyRes.error) {
@@ -465,10 +474,13 @@ function LoginPageInner() {
               id="mfa"
               type="text"
               inputMode="numeric"
-              pattern="\\d*"
+              pattern="[0-9]{6}"
               maxLength={6}
               value={mfaCode}
-              onChange={(e) => setMfaCode(e.target.value)}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+                setMfaCode(digits);
+              }}
               style={{
                 width: '100%',
                 border: '1px solid #cbd5e1',
