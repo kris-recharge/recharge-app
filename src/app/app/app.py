@@ -25,20 +25,27 @@ import plotly.graph_objects as go
 # ---- Dynamic DB engine: Supabase or SQLite ---------------------------------
 import os
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine import URL
 import sqlite3
 
-DB_SQLITE = "/Users/krishall/LynkWell DataSync/database/lynkwell_data.db"
-DB_SUPABASE = os.environ.get("SUPABASE_DB_URL")
+# Default DB: live next to this app, under ./database/lynkwell_data.db
+APP_DIR = Path(__file__).resolve().parent
+DEFAULT_SQLITE_PATH = APP_DIR / "database" / "lynkwell_data.db"
 
-if DB_SUPABASE:
-    engine = create_engine(DB_SUPABASE)
-    print("✅ Using Supabase PostgreSQL database")
-else:
-    engine = create_engine(f"sqlite:///{DB_SQLITE}")
-    print("💾 Using local SQLite database")
-
-def get_engine():
-    return engine
+def get_engine(db_path: str):
+    """Return a SQLAlchemy engine for the given SQLite path, or Supabase if provided.
+    Supabase (SUPABASE_DB_URL) wins over local path so we can deploy against Postgres
+    without changing UI code. For SQLite we build a URL so spaces in paths are safe.
+    """
+    supa_url = os.environ.get("SUPABASE_DB_URL")
+    if supa_url:
+        return create_engine(supa_url)
+    # Build a SQLite URL that is safe for paths with spaces
+    sqlite_url = URL.create(
+        "sqlite",
+        database=str(db_path),
+    )
+    return create_engine(sqlite_url)
 
 # ---- Optional: AgGrid for true row-click selection ------------------------
 try:
@@ -143,8 +150,10 @@ PLATFORM_MAP: Dict[str, str] = {
 }
 
 # ---- Paths / default DB -----------------------------------------------------
-BASE = Path.home() / "LynkWell DataSync"
+# Make paths relative to THIS file so it works the same on Mac and on Render.
+BASE = Path(__file__).resolve().parent
 DEFAULT_DB = BASE / "database" / "lynkwell_data.db"
+# keep logo next to the app, or adjust to BASE / "assets" / "...png"
 LOGO_PATH = BASE / "ReCharge Logo_REVA.png"
 
 # ---- DB cache-buster: use DB file mtime to invalidate caches -------------
@@ -263,6 +272,10 @@ with st.sidebar:
     st.title("Data Source & Time Range")
 
     db_path = st.text_input("SQLite DB path", value=str(DEFAULT_DB))
+    if os.path.exists(db_path):
+        st.caption(f"✅ DB found at: {db_path}")
+    else:
+        st.caption(f"❌ DB NOT FOUND at: {db_path}")
 
     # Load names from DB assets table and build combined list for dropdown
     ASSET_NAME_MAP = load_assets_map(db_path, _db_mtime(db_path))
@@ -305,23 +318,18 @@ start_utc_iso, end_utc_iso = akdt_range_to_utc_iso(start_date, start_hour, end_d
 
 # ---- DB helpers -------------------------------------------------------------
 def table_list(db_file: str, _mtime: float) -> List[str]:
-    """Return current table names from the *active* engine.
-    Not cached on purpose — we saw a case where an early empty result was cached
-    and Streamlit kept saying "DB file not found or no tables." even after the
-    DB was populated.
-    """
-    engine = get_engine()
+    """Return current table names for the active DB file."""
     try:
+        engine = get_engine(db_file)
         insp = inspect(engine)
         return sorted(insp.get_table_names())
-    except Exception:
-        # show a very small hint in the UI/logs during development
-        st.write("(debug) table_list: inspector could not read tables from engine")
+    except Exception as e:
+        st.write(f"(debug) table_list: inspector could not read tables from engine — {e}")
         return []
 
 @st.cache_data(show_spinner=False)
 def read_range(db_file: str, table: str, start_iso: str, end_iso: str, evse_id: Optional[str], _mtime: float) -> pd.DataFrame:
-    engine = get_engine()
+    engine = get_engine(db_file)
     where = ["timestamp >= :start AND timestamp <= :end"]
     params: Dict = {"start": start_iso, "end": end_iso}
     if evse_id:
@@ -350,7 +358,7 @@ def read_cea_samples(db_file: str, start_iso: str, end_iso: str, _mtime: float) 
       timestamp, station_id, connector_id, power_w, energy_wh, soc,
       amperage_import, offered_current_a, hvb_volts
     """
-    engine = get_engine()
+    engine = get_engine(db_file)
     try:
         df = pd.read_sql(
             """
@@ -536,7 +544,7 @@ ERROR_TABLE = "tritium_error_codes"  # columns: platform, code, impact, descript
 def error_code_table_exists(db_file: str, _mtime: float) -> bool:
     if not Path(db_file).exists():
         return False
-    engine = get_engine()
+    engine = get_engine(db_file)
     try:
         insp = inspect(engine)
         return ERROR_TABLE in insp.get_table_names()
@@ -544,7 +552,7 @@ def error_code_table_exists(db_file: str, _mtime: float) -> bool:
         return False
 
 def ensure_error_code_table(db_file: str) -> None:
-    engine = get_engine()
+    engine = get_engine(db_file)
     with engine.begin() as conn:
         conn.execute(
             f"""
@@ -566,7 +574,7 @@ def ensure_error_code_table(db_file: str) -> None:
 def get_error_codes_df(db_file: str, _mtime: float) -> pd.DataFrame:
     if not error_code_table_exists(db_file, _mtime):
         return pd.DataFrame(columns=["platform","code","impact","description"])
-    engine = get_engine()
+    engine = get_engine(db_file)
     try:
         return pd.read_sql(
             f"SELECT platform, code, impact, description FROM {ERROR_TABLE}", engine
@@ -670,7 +678,7 @@ def upsert_error_codes_from_excel(db_file: str, file_like) -> Tuple[int, int]:
 
     all_rows = pd.concat(frames, ignore_index=True)
 
-    engine = get_engine()
+    engine = get_engine(db_file)
     with engine.begin() as conn:
         for r in all_rows.itertuples(index=False):
             conn.execute(
@@ -873,7 +881,7 @@ with st.expander("🧰 Diagnostics", expanded=False):
         st.write("Tables found:", ", ".join(tl))
         def mmc(table):
             try:
-                engine = get_engine()
+                engine = get_engine(db_path)
                 with engine.connect() as con:
                     res = con.execute(f"SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM {table}")
                     c, mn, mx = res.fetchone()
