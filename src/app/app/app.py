@@ -33,23 +33,20 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_SQLITE_PATH = APP_DIR / "database" / "lynkwell_data.db"
 
 def get_engine(db_path: str):
-    """Return a SQLAlchemy engine, preferring a managed Postgres URL if available.
-    Priority:
-      1. RENDER_DB_URL   (Render Postgres service like "recharge-db")
-      2. SUPABASE_DB_URL (Supabase Postgres, used for prod/remote mirrors)
-      3. local SQLite file at `db_path`
-    This lets us run on Render without having to reach Supabase, while still 
-    supporting your existing Supabase mirror on macOS/local.
+    """Return a SQLAlchemy engine, preferring the Render Postgres URL if available.
+    Priority now:
+      1. RENDER_DB_URL or DATABASE_URL (Render-hosted Postgres)
+      2. local SQLite file at `db_path`
+    Supabase is intentionally not used here anymore — we keep auth in Supabase but
+    read OCPP/meters from Render.
     """
-    # 1) Render-managed Postgres (your "recharge-db" service) wins first
     render_db_url = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL")
     if render_db_url:
-        return create_engine(render_db_url)
-    # 2) Supabase Postgres (used today for 2FA/credentials + mirrored OCPP data)
-    supa_url = os.environ.get("SUPABASE_DB_URL")
-    if supa_url:
-        return create_engine(supa_url)
-    # 3) Fallback: local SQLite. Build a SQLite URL that is safe for spaces.
+        try:
+            return create_engine(render_db_url)
+        except Exception as e:
+            # If Render URL is set but broken, fall back to SQLite so the UI still loads
+            print(f"[db] failed to connect to Render Postgres, falling back to SQLite: {e}")
     sqlite_url = URL.create("sqlite", database=str(db_path))
     return create_engine(sqlite_url)
 
@@ -887,6 +884,8 @@ with st.expander("🧰 Diagnostics", expanded=False):
     _env_supabase = os.environ.get("SUPABASE_DB_URL")
     st.caption(f"RENDER_DB_URL seen: {'yes' if _env_render else 'no'}")
     st.caption(f"SUPABASE_DB_URL seen: {'yes' if _env_supabase else 'no'}")
+    chosen = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL") or f"sqlite:///{db_path}"
+    st.caption(f"DB engine in use: {('Render/DATABASE_URL' if (os.environ.get('RENDER_DB_URL') or os.environ.get('DATABASE_URL')) else 'SQLite')} -> {chosen}")
     tl = table_list(db_path, _db_mtime(db_path))
     if tl:
         st.write("Tables found:", ", ".join(tl))
