@@ -955,8 +955,9 @@ with tabs[0]:
         if not cea_df.empty:
             combined_sources.append(cea_df.copy())
 
-        # 🔽 Fallback for Render Postgres: show raw realtime_meter_values rows if session data is empty
+        # 🔽 Fallback for Render Postgres: if no LynkWell/CEA rows, try grabbing raw rows from Postgres
         if not combined_sources:
+            raw_fallback = pd.DataFrame()
             try:
                 engine = get_engine(db_path)
                 raw_fallback = pd.read_sql(
@@ -968,14 +969,20 @@ with tabs[0]:
                     """,
                     engine,
                 )
-                if not raw_fallback.empty:
-                    st.warning(
-                        "No session-shaped data for this window, but the database has raw meter rows. Showing latest 200 rows."
-                    )
-                    st.dataframe(raw_fallback)
-                    st.stop()
             except Exception as e:
+                # if even this fails, we bail out like before
                 st.info(f"No meter data in this window. (Error during fallback: {e})")
+                st.stop()
+
+            if raw_fallback is not None and not raw_fallback.empty:
+                st.warning(
+                    "No session-shaped data for this window, but the database has raw meter rows. Showing latest 200 rows and using them as the data source."
+                )
+                st.dataframe(raw_fallback)
+                # IMPORTANT: feed this into the normal pipeline below so charts / summaries still try to render
+                combined_sources.append(raw_fallback.copy())
+            else:
+                st.info("No meter data in this window.")
                 st.stop()
 
         if not combined_sources:
