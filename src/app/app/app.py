@@ -955,6 +955,37 @@ with tabs[0]:
         if not cea_df.empty:
             combined_sources.append(cea_df.copy())
 
+        # 🔽 Fallback for Render Postgres: show raw realtime_meter_values rows if session data is empty
+        if not combined_sources:
+            try:
+                engine = get_engine(db_path)
+                raw_fallback = pd.read_sql(
+                    """
+                    SELECT station_id,
+                           connector_id,
+                           transaction_id,
+                           timestamp,
+                           power_w,
+                           energy_wh,
+                           soc,
+                           amperage_import,
+                           offered_current_a
+                    FROM realtime_meter_values
+                    ORDER BY timestamp DESC
+                    LIMIT 200
+                    """,
+                    engine,
+                )
+                if not raw_fallback.empty:
+                    st.warning(
+                        "No session-shaped data for this window, but the database has raw meter rows. Showing latest 200 rows."
+                    )
+                    st.dataframe(raw_fallback)
+                    st.stop()
+            except Exception as e:
+                st.info(f"No meter data in this window. (Error during fallback: {e})")
+                st.stop()
+
         if not combined_sources:
             st.info("No meter data in this window.")
             df = pd.DataFrame()
