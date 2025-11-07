@@ -22,7 +22,7 @@ from io import BytesIO
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
-# ---- Dynamic DB engine: Supabase or SQLite ---------------------------------
+# ---- Dynamic DB engine: Render/Postgres, Supabase, or SQLite --------------
 import os
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import URL
@@ -33,18 +33,24 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_SQLITE_PATH = APP_DIR / "database" / "lynkwell_data.db"
 
 def get_engine(db_path: str):
-    """Return a SQLAlchemy engine for the given SQLite path, or Supabase if provided.
-    Supabase (SUPABASE_DB_URL) wins over local path so we can deploy against Postgres
-    without changing UI code. For SQLite we build a URL so spaces in paths are safe.
+    """Return a SQLAlchemy engine, preferring a managed Postgres URL if available.
+    Priority:
+      1. RENDER_DB_URL   (Render Postgres service like "recharge-db")
+      2. SUPABASE_DB_URL (Supabase Postgres, used for prod/remote mirrors)
+      3. local SQLite file at `db_path`
+    This lets us run on Render without having to reach Supabase, while still 
+    supporting your existing Supabase mirror on macOS/local.
     """
+    # 1) Render-managed Postgres (your "recharge-db" service) wins first
+    render_db_url = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL")
+    if render_db_url:
+        return create_engine(render_db_url)
+    # 2) Supabase Postgres (used today for 2FA/credentials + mirrored OCPP data)
     supa_url = os.environ.get("SUPABASE_DB_URL")
     if supa_url:
         return create_engine(supa_url)
-    # Build a SQLite URL that is safe for paths with spaces
-    sqlite_url = URL.create(
-        "sqlite",
-        database=str(db_path),
-    )
+    # 3) Fallback: local SQLite. Build a SQLite URL that is safe for spaces.
+    sqlite_url = URL.create("sqlite", database=str(db_path))
     return create_engine(sqlite_url)
 
 # ---- Optional: AgGrid for true row-click selection ------------------------
