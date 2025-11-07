@@ -34,18 +34,16 @@ DEFAULT_SQLITE_PATH = APP_DIR / "database" / "lynkwell_data.db"
 
 def get_engine(db_path: str):
     """Return a SQLAlchemy engine, preferring the Render Postgres URL if available.
-    Priority now:
+    Priority:
       1. RENDER_DB_URL or DATABASE_URL (Render-hosted Postgres)
       2. local SQLite file at `db_path`
-    Supabase is intentionally not used here anymore — we keep auth in Supabase but
-    read OCPP/meters from Render.
+    Supabase is intentionally not used anymore.
     """
     render_db_url = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL")
     if render_db_url:
         try:
             return create_engine(render_db_url)
         except Exception as e:
-            # If Render URL is set but broken, fall back to SQLite so the UI still loads
             print(f"[db] failed to connect to Render Postgres, falling back to SQLite: {e}")
     sqlite_url = URL.create("sqlite", database=str(db_path))
     return create_engine(sqlite_url)
@@ -878,14 +876,14 @@ def open_dialog(title: str, body: Callable[[], None]) -> None:
 
 # ---- Diagnostics drawer -----------------------------------------------------
 with st.expander("🧰 Diagnostics", expanded=False):
-    st.write(f"**DB:** `{db_path}`")
-    # runtime DB source visibility (helps confirm Render picked up env vars)
+    st.write(f"**DB (sidebar path):** `{db_path}`")
     _env_render = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL")
-    _env_supabase = os.environ.get("SUPABASE_DB_URL")
-    st.caption(f"RENDER_DB_URL seen: {'yes' if _env_render else 'no'}")
-    st.caption(f"SUPABASE_DB_URL seen: {'yes' if _env_supabase else 'no'}")
-    chosen = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL") or f"sqlite:///{db_path}"
-    st.caption(f"DB engine in use: {('Render/DATABASE_URL' if (os.environ.get('RENDER_DB_URL') or os.environ.get('DATABASE_URL')) else 'SQLite')} -> {chosen}")
+    if _env_render:
+        st.caption("RENDER_DB_URL seen: yes")
+        st.caption("DB engine in use: Render/Postgres (RENDER_DB_URL/DATABASE_URL)")
+    else:
+        st.caption("RENDER_DB_URL seen: no")
+        st.caption(f"DB engine in use: SQLite -> {db_path}")
     tl = table_list(db_path, _db_mtime(db_path))
     if tl:
         st.write("Tables found:", ", ".join(tl))
