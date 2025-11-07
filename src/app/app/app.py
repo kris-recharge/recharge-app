@@ -882,6 +882,11 @@ def open_dialog(title: str, body: Callable[[], None]) -> None:
 # ---- Diagnostics drawer -----------------------------------------------------
 with st.expander("🧰 Diagnostics", expanded=False):
     st.write(f"**DB:** `{db_path}`")
+    # runtime DB source visibility (helps confirm Render picked up env vars)
+    _env_render = os.environ.get("RENDER_DB_URL") or os.environ.get("DATABASE_URL")
+    _env_supabase = os.environ.get("SUPABASE_DB_URL")
+    st.caption(f"RENDER_DB_URL seen: {'yes' if _env_render else 'no'}")
+    st.caption(f"SUPABASE_DB_URL seen: {'yes' if _env_supabase else 'no'}")
     tl = table_list(db_path, _db_mtime(db_path))
     if tl:
         st.write("Tables found:", ", ".join(tl))
