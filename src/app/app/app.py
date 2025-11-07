@@ -962,6 +962,12 @@ with tabs[0]:
             # Apply fleet filter (include CEA by default since we added it to EVSE_NAME_MAP)
             if fleet_only:
                 cea_df = cea_df[cea_df["station_id"].astype(str).isin(FLEET_IDS)]
+        
+        # If we pulled raw rows (like on Render), drop synthetic transaction_ids
+        if not mdf.empty and "transaction_id" in mdf.columns:
+            tx = mdf["transaction_id"].astype(str)
+            synth_mask = tx.str.startswith("synth:") | tx.str.startswith("synthas_")
+            mdf = mdf[~synth_mask].copy()
 
         # Apply filters to LynkWell data first
         if 'evse_ids_set' in locals() and len(evse_ids_set) > 0:
@@ -996,6 +1002,10 @@ with tabs[0]:
                 st.stop()
 
             if raw_fallback is not None and not raw_fallback.empty:
+                if "transaction_id" in raw_fallback.columns:
+                    tx = raw_fallback["transaction_id"].astype(str)
+                    synth_mask = tx.str.startswith("synth:") | tx.str.startswith("synthas_")
+                    raw_fallback = raw_fallback[~synth_mask].copy()
                 st.warning(
                     "No session-shaped data for this window, but the database has raw meter rows. Using them as the data source."
                 )
