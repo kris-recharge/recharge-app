@@ -976,9 +976,11 @@ with tabs[0]:
 
             if raw_fallback is not None and not raw_fallback.empty:
                 st.warning(
-                    "No session-shaped data for this window, but the database has raw meter rows. Showing latest 200 rows and using them as the data source."
+                    "No session-shaped data for this window, but the database has raw meter rows. Using them as the data source."
                 )
-                st.dataframe(raw_fallback)
+                # keep it out of the main layout so the real session table is front-and-center
+                with st.expander("Show raw meter rows from database (latest 200)"):
+                    st.dataframe(raw_fallback)
                 # IMPORTANT: feed this into the normal pipeline below so charts / summaries still try to render
                 combined_sources.append(raw_fallback.copy())
             else:
@@ -1869,13 +1871,43 @@ with tabs[1]:
         )
 
         if status_df.empty:
+            # Fallback: try to show the latest status notifications from the DB even if the time window is empty
+            try:
+                engine = get_engine(db_path)
+                raw_status = pd.read_sql(
+                    """
+                    SELECT *
+                    FROM realtime_status_notifications
+                    ORDER BY timestamp DESC
+                    LIMIT 200
+                    """,
+                    engine,
+                )
+                if raw_status is not None and not raw_status.empty:
+                    st.warning(
+                        "No status data in this window, but the database has recent status notifications. Showing latest 200 rows."
+                    )
+                    raw_status = add_akdt(raw_status, "timestamp")
+                    raw_status = add_evse_name_col(raw_status, "station_id")
+                    # make the column name consistent with the main view
+                    if "AKDT_dt" in raw_status.columns:
+                        try:
+                            raw_status["Date/Time (UTC)"] = raw_status["AKDT_dt"].dt.tz_convert(AK).dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            raw_status["Date/Time (UTC)"] = raw_status["AKDT_dt"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                    st.dataframe(raw_status, use_container_width=True)
+                    # define for export tab
+                    status_df = raw_status.copy()
+                    # stop further processing of this tab
+                    st.stop()
+            except Exception:
+                pass
             st.info("No status data in this window.")
         else:
             # Normalize time columns to UTC -> AKDT helpers
             status_df = add_akdt(status_df, "timestamp")
             # Friendly EVSE name column
             status_df = add_evse_name_col(status_df, "station_id")
-
             # Ensure an AKDT label column for display; keep tz-aware for sort
             if "AKDT" in status_df.columns:
                 status_df = status_df.rename(columns={"AKDT": "Date/Time (UTC)"})
@@ -1885,27 +1917,23 @@ with tabs[1]:
                         status_df["Date/Time (UTC)"] = status_df["AKDT_dt"].dt.tz_convert(AK).dt.strftime("%Y-%m-%d %H:%M:%S")
                     except Exception:
                         status_df["Date/Time (UTC)"] = status_df["AKDT_dt"].dt.strftime("%Y-%m-%d %H:%M:%S")
-
             # Apply sidebar filters (if any)
             if 'selected_evse_ids' in locals() and selected_evse_ids:
                 _set = set(str(x) for x in selected_evse_ids)
                 status_df = status_df[status_df["station_id"].astype(str).isin(_set)]
             if fleet_only:
                 status_df = status_df[status_df["station_id"].astype(str).isin(FLEET_IDS)]
-
             # Sort newest -> oldest by the true datetime
             if "AKDT_dt" in status_df.columns:
                 status_df = status_df.sort_values("AKDT_dt", ascending=False, kind="mergesort")
             else:
-                # Fallback: build AKDT_dt from timestamp
                 ts = pd.to_datetime(
                     status_df["timestamp"].astype(str).str.replace("Z", "+00:00", regex=False),
                     utc=True,
                     errors="coerce",
                 ).dt.tz_convert(AK)
                 status_df = status_df.assign(AKDT_dt=ts).sort_values("AKDT_dt", ascending=False, kind="mergesort")
-
-            # --- Tritium code enrichment (Impact/Description) BEFORE rendering ---
+            # Tritium code enrichment (keep your existing code here, unchanged)
             try:
                 codes_df = get_error_codes_df(db_path, _db_mtime(db_path))
                 sdf = status_df.copy()
