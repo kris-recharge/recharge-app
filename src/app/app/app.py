@@ -906,6 +906,27 @@ with st.expander("🧰 Diagnostics", expanded=False):
         ]:
             if t in tl: 
                 mmc(t)
+
+        # If we're on Render/Postgres, try to show the latest ingest heartbeats written by nightly_ingest.sh
+        if _env_render:
+            try:
+                engine = get_engine(db_path)
+                heartbeats = pd.read_sql(
+                    """
+                    SELECT at_utc, source
+                    FROM ingest_heartbeats
+                    ORDER BY at_utc DESC
+                    LIMIT 25
+                    """,
+                    engine,
+                )
+                if not heartbeats.empty:
+                    st.markdown("**Render ingest heartbeats (latest 25):**")
+                    st.dataframe(heartbeats, use_container_width=True)
+                else:
+                    st.caption("Render ingest heartbeats table exists but has no rows in this view.")
+            except Exception as e:
+                st.caption(f"(diagnostic) ingest_heartbeats not available on Render: {e}")
     else:
         st.warning("DB file not found or no tables.")
 
