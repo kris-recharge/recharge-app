@@ -961,15 +961,7 @@ with tabs[0]:
                 engine = get_engine(db_path)
                 raw_fallback = pd.read_sql(
                     """
-                    SELECT station_id,
-                           connector_id,
-                           transaction_id,
-                           timestamp,
-                           power_w,
-                           energy_wh,
-                           soc,
-                           amperage_import,
-                           offered_current_a
+                    SELECT *
                     FROM realtime_meter_values
                     ORDER BY timestamp DESC
                     LIMIT 200
