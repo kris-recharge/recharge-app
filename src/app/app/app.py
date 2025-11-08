@@ -1433,15 +1433,17 @@ with tabs[0]:
 
                 # Prefer AgGrid (true row-click selection). Fallback to data_editor if not installed.
                 if AGGRID_AVAILABLE:
-                    tbl = session_summary[[
-                        "Date/Time (AKDT)", "Stop Time (AKDT)", "Location",
-                        "Connector #", "Connector Type", "Max Power kW", "Energy kWh", "Duration (min)",
-                        "SoC Start", "SoC End", "ID Tag", "Transaction ID",
-                        "_start", "_end"
-                    ]].copy()
-                    tbl = tbl.sort_values("_start", ascending=False, kind="mergesort")
-
-                    gob = GridOptionsBuilder.from_dataframe(tbl)
+                    tbl_full = session_summary[
+                        [
+                            "Date/Time (AKDT)", "Stop Time (AKDT)", "Location",
+                            "Connector #", "Connector Type", "Max Power kW", "Energy kWh", "Duration (min)",
+                            "SoC Start", "SoC End", "ID Tag", "Transaction ID",
+                            "_start", "_end"
+                        ]
+                    ].copy()
+                    tbl_full = tbl_full.sort_values("_start", ascending=False, kind="mergesort").reset_index(drop=True)
+                    tbl_display = tbl_full.drop(columns=["_start", "_end"], errors="ignore")
+                    gob = GridOptionsBuilder.from_dataframe(tbl_display)
                     gob.configure_default_column(
                         filter=True,
                         sortable=True,
@@ -1478,7 +1480,7 @@ with tabs[0]:
                     gob.configure_column("Duration (min)", maxWidth=160)
 
                     grid = AgGrid(
-                        tbl,
+                        tbl_display,
                         gridOptions=gob.build(),
                         update_mode=GridUpdateMode.SELECTION_CHANGED,
                         fit_columns_on_grid_load=True,
@@ -1491,15 +1493,15 @@ with tabs[0]:
                         pass
 
                     sel = grid.get("selected_rows", [])
-
-                    # Normalize selection to a single row dict
                     row_dict = None
-                    if isinstance(sel, list):
-                        if len(sel) > 0:
-                            row_dict = sel[0]
-                    elif isinstance(sel, pd.DataFrame):
-                        if not sel.empty:
-                            row_dict = sel.iloc[0].to_dict()
+                    if sel:
+                        # `sel[0]['_selectedRowNodeInfo']['nodeRowIndex']` is provided by st-aggrid
+                        idx = sel[0].get("_selectedRowNodeInfo", {}).get("nodeRowIndex")
+                        if idx is None:
+                            # fallback to first row if index not present
+                            row_dict = tbl_full.iloc[0].to_dict()
+                        else:
+                            row_dict = tbl_full.iloc[int(idx)].to_dict()
 
                     if row_dict is not None:
                         start_pad = pd.to_datetime(row_dict.get("_start")) - pd.Timedelta(minutes=10)
@@ -1516,9 +1518,9 @@ with tabs[0]:
                     ]].copy()
                     tbl = tbl.sort_values("_start", ascending=False, kind="mergesort")
                     tbl.insert(0, "Zoom", False)
-
+                    display_editor = tbl.drop(columns=["_start", "_end"], errors="ignore")
                     edited = st.data_editor(
-                        tbl,
+                        display_editor,
                         hide_index=True,
                         use_container_width=True,
                         column_config={
@@ -1539,10 +1541,10 @@ with tabs[0]:
                             "SoC End": st.column_config.NumberColumn("SoC End", format="%d%%"),
                             "ID Tag": st.column_config.TextColumn("ID Tag"),
                             "Transaction ID": st.column_config.TextColumn("Transaction ID", disabled=True),
-                            "_start": st.column_config.DatetimeColumn("_start", disabled=True),
-                            "_end": st.column_config.DatetimeColumn("_end", disabled=True),
+                            # "_start": st.column_config.DatetimeColumn("_start", disabled=True),
+                            # "_end": st.column_config.DatetimeColumn("_end", disabled=True),
                         },
-                        disabled=["Date/Time (AKDT)", "Stop Time (AKDT)", "Location", "Connector #", "Connector Type", "Max Power kW", "Energy kWh", "Duration (min)", "SoC Start", "SoC End", "ID Tag", "Transaction ID", "_start", "_end"],
+                        disabled=["Date/Time (AKDT)", "Stop Time (AKDT)", "Location", "Connector #", "Connector Type", "Max Power kW", "Energy kWh", "Duration (min)", "SoC Start", "SoC End", "ID Tag", "Transaction ID"],
                         key="session_summary_editor",
                     )
 
@@ -1562,7 +1564,7 @@ with tabs[0]:
                         if st.button("🔍 Zoom to selected", key="zoom_selected"):
                             if sel_rows:
                                 i = sel_rows[0]
-                                row = edited.loc[i]
+                                row = tbl.loc[i]
                                 start_pad = pd.to_datetime(row["_start"], errors="coerce") - pd.Timedelta(minutes=10)
                                 end_pad = pd.to_datetime(row["_end"], errors="coerce") + pd.Timedelta(minutes=10)
                                 x_range_override = (start_pad, end_pad)
@@ -1942,7 +1944,93 @@ with tabs[1]:
         )
 
         if status_df.empty:
-            st.info("No status data in this window.")
+            # Try fallback query for latest 500 if main query is empty
+            fallback = pd.DataFrame()
+            try:
+                engine = get_engine(db_path)
+                fallback = pd.read_sql(f"SELECT * FROM {status_table} ORDER BY timestamp DESC LIMIT 500", engine)
+            except Exception:
+                fallback = pd.DataFrame()
+            if fallback is not None and not fallback.empty:
+                # Enrichment pipeline: add_akdt, add_evse_name_col, sidebar filters, vendor filter, sort newest-first, Tritium join
+                status_df = fallback.copy()
+                status_df = add_akdt(status_df, "timestamp")
+                status_df = add_evse_name_col(status_df, "station_id")
+                if "selected_evse_ids" in locals() and selected_evse_ids:
+                    wanted = {str(x) for x in selected_evse_ids}
+                    status_df = status_df[status_df["station_id"].astype(str).isin(wanted)]
+                # optional: only rows that actually have a vendor_error_code
+                if show_only_vendor and "vendor_error_code" in status_df.columns:
+                    v = status_df["vendor_error_code"].astype(str).str.strip()
+                    mask = (v != "") & (v.str.lower() != "none") & (v != "0")
+                    status_df = status_df[mask]
+                # ... after enrichment / sorting ...
+                if show_only_vendor:
+                    if "vendor_error_code" in status_df.columns:
+                        v = status_df["vendor_error_code"].astype(str).str.strip()
+                        mask = (v != "") & (v.str.lower() != "none") & (v != "0")
+                        status_df = status_df[mask]
+                # newest → oldest
+                if "AKDT_dt" in status_df.columns:
+                    status_df = status_df.sort_values("AKDT_dt", ascending=False, kind="mergesort")
+                else:
+                    ts = pd.to_datetime(
+                        status_df["timestamp"].astype(str).str.replace("Z", "+00:00", regex=False),
+                        utc=True,
+                        errors="coerce",
+                    ).dt.tz_convert(AK)
+                    status_df = status_df.assign(AKDT_dt=ts).sort_values("AKDT_dt", ascending=False, kind="mergesort")
+                # Tritium enrichment
+                try:
+                    codes_df = get_error_codes_df(db_path, _db_mtime(db_path))  # platform, code, impact, description
+                    if not codes_df.empty:
+                        codes_df = codes_df.rename(
+                            columns={"platform": "Platform", "code": "code_key"}
+                        ).copy()
+                        base = status_df.copy()
+                        base["Platform"] = base.get("EVSE", base.get("station_id", "")).map(PLATFORM_MAP).fillna("")
+                        if "vendor_error_code" in base.columns:
+                            v = base["vendor_error_code"].astype(str)
+                            base["code_key"] = v.str.extract(r"(\d+)", expand=False).fillna("")
+                        else:
+                            base["code_key"] = ""
+                        base = base.merge(
+                            codes_df[["Platform", "code_key", "impact", "description"]],
+                            on=["Platform", "code_key"],
+                            how="left",
+                        )
+                        status_df = base
+                except Exception:
+                    pass
+                display_df = status_df.copy()
+                if "AKDT" in display_df.columns:
+                    display_df = display_df.rename(columns={"AKDT": "Date/Time (AKDT)"})
+                wanted_cols = [
+                    "Date/Time (AKDT)",
+                    "EVSE",
+                    "connector_id",
+                    "status",
+                    "error_code",
+                    "vendor_error_code",
+                    "impact",
+                    "description",
+                ]
+                final_cols = [c for c in wanted_cols if c in display_df.columns]
+                if AGGRID_AVAILABLE:
+                    gob = GridOptionsBuilder.from_dataframe(display_df[final_cols])
+                    gob.configure_default_column(filter=True, sortable=True, resizable=True, flex=1, minWidth=110)
+                    if "Date/Time (AKDT)" in final_cols:
+                        gob.configure_column("Date/Time (AKDT)", sort="desc")
+                    AgGrid(
+                        display_df[final_cols],
+                        gridOptions=gob.build(),
+                        fit_columns_on_grid_load=True,
+                        height=340,
+                    )
+                else:
+                    st.dataframe(display_df[final_cols], use_container_width=True)
+            else:
+                st.info("No status data in this window.")
         else:
             # time + friendly name
             status_df = add_akdt(status_df, "timestamp")
