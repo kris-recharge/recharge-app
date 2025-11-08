@@ -934,7 +934,7 @@ with st.expander("🧰 Diagnostics", expanded=False):
 tabs = st.tabs(["Charging Sessions", "Status History", "Connectivity", "⬇Data Export"])
 
 # ============================================================================ #
-# 1) Meter Data (Session History)
+# 1) Charge Session (Session History)
 # ============================================================================ #
 with tabs[0]:
 
@@ -943,6 +943,12 @@ with tabs[0]:
     evse_ids_set = set(str(x) for x in selected_evse_ids) if 'selected_evse_ids' in locals() else set()
 
     avail = table_list(db_path, _db_mtime(db_path))
+    # Prefer session-shaped tables if present on Render
+    session_table = (
+        "sessions"
+        if "sessions" in avail
+        else ("charge_sessions" if "charge_sessions" in avail else None)
+    )
     meter_table = "realtime_meter_values" if "realtime_meter_values" in avail else ("meter_values" if "meter_values" in avail else None)
 
     if not meter_table:
@@ -1015,6 +1021,25 @@ with tabs[0]:
                 # IMPORTANT: feed this into the normal pipeline below so charts / summaries still try to render
                 combined_sources.append(raw_fallback.copy())
             else:
+                # If we truly have no meter-like rows, but a session-shaped table exists on Render,
+                # show that instead of just stopping.
+                if session_table is not None:
+                    try:
+                        engine = get_engine(db_path)
+                        # show latest 200 sessions regardless of time window
+                        session_fallback = pd.read_sql(
+                            f"SELECT * FROM {session_table} ORDER BY start_time DESC NULLS LAST LIMIT 200",
+                            engine,
+                        )
+                        if not session_fallback.empty:
+                            st.warning(
+                                "No meter data in this window, but session rows were found in the database. Showing latest 200 sessions."
+                            )
+                            st.dataframe(session_fallback, use_container_width=True)
+                            st.stop()
+                    except Exception:
+                        pass
+
                 st.info("No meter data in this window.")
                 st.stop()
 
