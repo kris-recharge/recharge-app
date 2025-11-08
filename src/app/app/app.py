@@ -1406,8 +1406,12 @@ with tabs[0]:
                         session_summary[_c] = pd.Series([np.nan] * len(session_summary))
                 # Ensure column order for consistency
                 session_summary = session_summary[_summary_cols + [c for c in session_summary.columns if c not in _summary_cols]]
-                # 🔽 Force newest → oldest by the real datetime
-                session_summary = session_summary.sort_values("_start", ascending=False, kind="mergesort").reset_index(drop=True)
+
+                # 🔽 Force newest → oldest by the real datetime (only if we actually have _start)
+                if "_start" in session_summary.columns:
+                    session_summary = session_summary.sort_values("_start", ascending=False, kind="mergesort").reset_index(drop=True)
+                else:
+                    session_summary = session_summary.reset_index(drop=True)
                 # ---- Make latest session summary available to Export tab (with cache-busting) ----
                 st.session_state["export_session_summary"] = session_summary.copy()
                 st.session_state["export_context"] = {
