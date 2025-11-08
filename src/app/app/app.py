@@ -998,7 +998,7 @@ with tabs[0]:
                     SELECT *
                     FROM realtime_meter_values
                     ORDER BY timestamp DESC
-                    LIMIT 200
+                    LIMIT 20000
                     """,
                     engine,
                 )
@@ -1026,9 +1026,9 @@ with tabs[0]:
                 if session_table is not None:
                     try:
                         engine = get_engine(db_path)
-                        # show latest 200 sessions regardless of time window
+                        # show latest 20000 sessions regardless of time window
                         session_fallback = pd.read_sql(
-                            f"SELECT * FROM {session_table} ORDER BY start_time DESC NULLS LAST LIMIT 200",
+                            f"SELECT * FROM {session_table} ORDER BY start_time DESC NULLS LAST LIMIT 20000",
                             engine,
                         )
                         if not session_fallback.empty:
