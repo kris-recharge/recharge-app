@@ -281,7 +281,17 @@ with st.sidebar:
     # Load names from DB assets table and build combined list for dropdown
     ASSET_NAME_MAP = load_assets_map(db_path, _db_mtime(db_path))
     ALL_NAME_MAP = {**EVSE_NAME_MAP, **ASSET_NAME_MAP}
-    unique_evse_names = sorted(set(ALL_NAME_MAP.values()))
+
+    # some render DBs bring in short 4-char codes (e.g. "00F5") that we don't want
+    def _looks_like_temp_name(name: str) -> bool:
+        name = str(name)
+        if len(name) == 4 and all(ch in "0123456789abcdefABCDEF" for ch in name):
+            return True
+        return False
+
+    raw_names = set(ALL_NAME_MAP.values())
+    # keep nice names, drop the short hex-ish ones
+    unique_evse_names = sorted(n for n in raw_names if not _looks_like_temp_name(n))
 
     # Multi-select EVSEs (leave empty for ALL)
     evse_picks = st.multiselect(
@@ -290,6 +300,7 @@ with st.sidebar:
         default=[],
         help="Pick one or more sites; leave empty for all."
     )
+
     # Build name→id maps (dynamic overrides static if both exist)
     NAME_TO_ID = {**{v: k for k, v in EVSE_NAME_MAP.items()}, **{v: k for k, v in ASSET_NAME_MAP.items()}}
     selected_evse_ids = [NAME_TO_ID[n] for n in evse_picks if n in NAME_TO_ID]
@@ -1410,6 +1421,24 @@ with tabs[0]:
                 # 🔽 Force newest → oldest by the real datetime (only if we actually have _start)
                 if "_start" in session_summary.columns:
                     session_summary = session_summary.sort_values("_start", ascending=False, kind="mergesort").reset_index(drop=True)
+                    # enrich sessions with ID Tag / VID from authorize tables (Render needs this)
+                    try:
+                        id_map, vid_map = build_auth_maps(
+                            db_path,
+                            start_utc_iso,
+                            end_utc_iso,
+                            None,
+                            _db_mtime(db_path),
+                        )
+                    except Exception:
+                        id_map, vid_map = {}, {}
+
+                    if not session_summary.empty and "Transaction ID" in session_summary.columns:
+                        tx = session_summary["Transaction ID"].astype(str)
+                        # prefer explicit id_tag from authorize
+                        session_summary["ID Tag"] = tx.map(id_map).fillna(session_summary.get("ID Tag", ""))
+                        # keep VID as a separate column (not shown in table unless added)
+                        session_summary["VID"] = tx.map(vid_map).fillna(session_summary.get("VID", ""))
                 else:
                     session_summary = session_summary.reset_index(drop=True)
                 # ---- Make latest session summary available to Export tab (with cache-busting) ----
