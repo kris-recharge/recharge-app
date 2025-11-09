@@ -1003,7 +1003,9 @@ with tabs[0]:
 
         # Apply filters to LynkWell data first
         if 'evse_ids_set' in locals() and len(evse_ids_set) > 0:
-            mdf = mdf[mdf["station_id"].astype(str).isin(evse_ids_set)]
+            # apply EVSE filter only if this frame actually has station_id
+            if evse_ids_set and ("station_id" in mdf.columns):
+                mdf = mdf[mdf["station_id"].astype(str).isin(evse_ids_set)]
         if fleet_only:
             mdf = mdf[mdf["station_id"].astype(str).isin(FLEET_IDS)]
 
@@ -1416,7 +1418,30 @@ with tabs[0]:
                 return out
 
             session_summary = _build_session_summary(mdf)
-            # --- Ensure session_summary always has the standard columns (even if empty) ---
+            # try to pull id_tag / VID from authorize rows for this same time window
+            try:
+                auth_id_map, auth_vid_map = build_auth_maps(
+                    db_path,
+                    start_utc_iso,
+                    end_utc_iso,
+                    None,
+                    _db_mtime(db_path),
+                )
+            except Exception:
+                auth_id_map, auth_vid_map = {}, {}
+
+            if session_summary is not None and not session_summary.empty and "Transaction ID" in session_summary.columns:
+                def _resolve_tag(txn: str) -> str:
+                    txn = str(txn)
+                    # 1) real id_tag
+                    if txn in auth_id_map and auth_id_map[txn]:
+                        return auth_id_map[txn]
+                    # 2) fall back to VID
+                    if txn in auth_vid_map and auth_vid_map[txn]:
+                        return f"VID:{auth_vid_map[txn]}"
+                    return ""
+                session_summary["ID Tag"] = session_summary["Transaction ID"].map(_resolve_tag)
+            
             # --- Ensure session_summary always has the standard columns (even if empty) ---
             _summary_cols = [
                 "Date/Time (AKDT)", "Stop Time (AKDT)", "Location", "Transaction ID",
