@@ -282,11 +282,26 @@ with st.sidebar:
     ASSET_NAME_MAP = load_assets_map(db_path, _db_mtime(db_path))
     ALL_NAME_MAP = {**EVSE_NAME_MAP, **ASSET_NAME_MAP}
 
-    # some render DBs bring in short 4-char codes (e.g. "00F5") that we don't want
+    # some render DBs bring in short 4-char codes (e.g. "00F5", "3RT9") that we don't want
     def _looks_like_temp_name(name: str) -> bool:
-        name = str(name)
-        if len(name) == 4 and all(ch in "0123456789abcdefABCDEF" for ch in name):
+        name = str(name).strip()
+
+        # keep our known good, human names no matter what
+        KEEP = {
+            "ARG - Left",
+            "ARG - Right",
+            "Delta - Left",
+            "Delta - Right",
+            "Glennallen",
+            "Cantwell",
+        }
+        if name in KEEP:
+            return False
+
+        # nuke anything shorter than 5 characters – these are all the junk codes we're seeing on Render
+        if len(name) < 5:
             return True
+
         return False
 
     raw_names = set(ALL_NAME_MAP.values())
@@ -1421,6 +1436,41 @@ with tabs[0]:
                 # 🔽 Force newest → oldest by the real datetime (only if we actually have _start)
                 if "_start" in session_summary.columns:
                     session_summary = session_summary.sort_values("_start", ascending=False, kind="mergesort").reset_index(drop=True)
+                            # --- Render-only enrichment: pull ID Tag / VID from helper table if present ---
+                    # This lets us show ID Tag even when Postgres doesn't have realtime_authorize rows.
+                    try:
+                        engine = get_engine(db_path)
+                        # session_vids is created/pushed by push_to_render.py
+                        sv = pd.read_sql("SELECT transaction_id, id_tag, vid FROM session_vids", engine)
+                    except Exception:
+                        sv = pd.DataFrame()
+
+                    if not sv.empty and "Transaction ID" in session_summary.columns:
+                        # normalize join keys to string for a clean merge
+                        session_summary["Transaction ID"] = session_summary["Transaction ID"].astype(str)
+                        sv["transaction_id"] = sv["transaction_id"].astype(str)
+
+                        session_summary = session_summary.merge(
+                            sv.rename(columns={"transaction_id": "Transaction ID"}),
+                            on="Transaction ID",
+                            how="left",
+                            suffixes=("", "_from_helper"),
+                        )
+
+                        # make sure the display column exists
+                        if "ID Tag" not in session_summary.columns:
+                            session_summary["ID Tag"] = ""
+
+                        # prefer the existing ID Tag, otherwise the helper-table id_tag, otherwise VID
+                        session_summary["ID Tag"] = (
+                            session_summary["ID Tag"]
+                            .fillna("")
+                            .replace("", np.nan)
+                            .combine_first(session_summary.get("id_tag", "").replace("", np.nan))
+                            .combine_first(session_summary.get("vid", "").replace("", np.nan))
+                            .fillna("")
+                        )
+                    # --- end Render-only enrichment ---
                     # enrich sessions with ID Tag / VID from authorize tables (Render needs this)
                     try:
                         id_map, vid_map = build_auth_maps(
