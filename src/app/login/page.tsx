@@ -239,9 +239,8 @@ function LoginPageInner() {
     }
 
     // After successful MFA, forward token to Portal v2
-    const token =
-      verifyRes.data?.session?.access_token ||
-      (await supabase.auth.getSession()).data?.session?.access_token;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
 
     if (token) {
       window.location.href = `${PORTAL_V2}?sb=${encodeURIComponent(token)}`;
