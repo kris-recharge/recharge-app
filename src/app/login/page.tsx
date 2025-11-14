@@ -5,6 +5,9 @@ import { useEffect, useMemo, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabaseClient';
 
+const PORTAL_V2 =
+  process.env.NEXT_PUBLIC_PORTAL_V2_URL ?? 'https://recharge-portal-v2.onrender.com';
+
 type View = 'login' | 'mfa' | 'reset';
 
 function LoginPageInner() {
@@ -75,26 +78,6 @@ function LoginPageInner() {
     }
   }, [searchParams]);
 
-  // If Supabase directs recovery traffic to /login, forward it to /auth/callback
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const url = new URL(window.location.href);
-    const hasCode = url.searchParams.has('code');
-    const hash = url.hash || '';
-    const isRecoveryHash = /(^#|&)type=recovery/.test(hash) && /access_token=/.test(hash) && /refresh_token=/.test(hash);
-
-    if (hasCode) {
-      const qs = url.searchParams.toString();
-      router.replace(`/auth/callback${qs ? `?${qs}` : ''}`);
-      return;
-    }
-
-    if (isRecoveryHash) {
-      router.replace(`/auth/callback${hash}`);
-      return;
-    }
-  }, [searchParams, router]);
-
   // redirect if already logged in (skip if in recovery/invite flow)
   useEffect(() => {
     (async () => {
@@ -109,7 +92,7 @@ function LoginPageInner() {
 
       const { data } = await supabase.auth.getSession();
       if (data?.session) {
-        router.replace('/app');
+        window.location.replace(PORTAL_V2);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,7 +186,7 @@ function LoginPageInner() {
     }
 
     // No TOTP factor — proceed directly
-    router.replace('/app');
+    window.location.href = PORTAL_V2;
     setLoading(false);
     return;
   }
@@ -241,7 +224,7 @@ function LoginPageInner() {
       return;
     }
 
-    router.replace('/app');
+    window.location.href = PORTAL_V2;
     setLoading(false);
   }
 

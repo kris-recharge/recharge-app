@@ -2,6 +2,8 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0; // ok on server components
 
+const PORTAL_V2 = process.env.NEXT_PUBLIC_PORTAL_V2_URL ?? 'https://recharge-portal-v2.onrender.com';
+
 export default function AuthCallback() {
   // Keep typing simple so we don't need to import React types on the server
   const pageStyle = {
@@ -16,14 +18,15 @@ export default function AuthCallback() {
   // and redirect to the appropriate flow.
   const script = `(() => {
     try {
+      const PORTAL_V2 = '${PORTAL_V2}';
       const url = new URL(window.location.href);
 
-      // Helper: keep only internal next= paths
+      // Helper: keep only internal next= paths or URLs starting with PORTAL_V2
       const pickSafeNext = (candidate) => {
         if (!candidate) return '';
         try {
-          // Allow only "/..." relative paths; drop protocol/hosted URLs
           if (candidate.startsWith('/')) return candidate;
+          if (candidate.startsWith(PORTAL_V2)) return candidate;
         } catch (_) {}
         return '';
       };
@@ -53,14 +56,26 @@ export default function AuthCallback() {
         }
       }
 
-      // 3) Error cases from Supabase
+      // 3) If Supabase handed us an access token (magiclink/sign-in), go straight to v2
+      if (url.hash && url.hash.includes('access_token=')) {
+        const nextAbs = pickSafeNext(url.searchParams.get('redirect_to') || url.searchParams.get('next'));
+        if (nextAbs) {
+          const dest = nextAbs.startsWith('/') ? (PORTAL_V2 + nextAbs) : nextAbs;
+          window.location.replace(dest);
+        } else {
+          window.location.replace(PORTAL_V2);
+        }
+        return;
+      }
+
+      // 4) Error cases from Supabase
       const err = url.searchParams.get('error') || url.searchParams.get('error_code');
       if (err) {
         window.location.replace('/login?error=' + encodeURIComponent(err));
         return;
       }
 
-      // 4) Fallback: go back to login
+      // 5) Fallback: go back to login
       window.location.replace('/login');
     } catch (e) {
       console.error(e);
