@@ -92,7 +92,12 @@ function LoginPageInner() {
 
       const { data } = await supabase.auth.getSession();
       if (data?.session) {
-        window.location.replace(PORTAL_V2);
+        const token = data.session.access_token;
+        if (token) {
+          window.location.replace(`${PORTAL_V2}?sb=${encodeURIComponent(token)}`);
+        } else {
+          window.location.replace(PORTAL_V2);
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,9 +191,18 @@ function LoginPageInner() {
     }
 
     // No TOTP factor — proceed directly
-    window.location.href = PORTAL_V2;
-    setLoading(false);
-    return;
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      if (token) {
+        window.location.href = `${PORTAL_V2}?sb=${encodeURIComponent(token)}`;
+      } else {
+        window.location.href = PORTAL_V2;
+      }
+    } finally {
+      setLoading(false);
+      return;
+    }
   }
 
   async function onSubmitMfa(e: React.FormEvent) {
@@ -224,7 +238,16 @@ function LoginPageInner() {
       return;
     }
 
-    window.location.href = PORTAL_V2;
+    // After successful MFA, forward token to Portal v2
+    const token =
+      verifyRes.data?.session?.access_token ||
+      (await supabase.auth.getSession()).data?.session?.access_token;
+
+    if (token) {
+      window.location.href = `${PORTAL_V2}?sb=${encodeURIComponent(token)}`;
+    } else {
+      window.location.href = PORTAL_V2;
+    }
     setLoading(false);
   }
 

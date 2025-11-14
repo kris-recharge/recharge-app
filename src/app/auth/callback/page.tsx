@@ -56,16 +56,24 @@ export default function AuthCallback() {
         }
       }
 
-      // 3) If Supabase handed us an access token (magiclink/sign-in), go straight to v2
-      if (url.hash && url.hash.includes('access_token=')) {
-        const nextAbs = pickSafeNext(url.searchParams.get('redirect_to') || url.searchParams.get('next'));
-        if (nextAbs) {
-          const dest = nextAbs.startsWith('/') ? (PORTAL_V2 + nextAbs) : nextAbs;
-          window.location.replace(dest);
-        } else {
-          window.location.replace(PORTAL_V2);
+      // 3) If Supabase handed us an access token (magiclink/sign-in), go straight to v2 WITH ?sb=
+      if (url.hash && (url.hash.includes('access_token=') || url.hash.includes('token='))) {
+        const hash = new URLSearchParams(url.hash.substring(1));
+        const at = hash.get('access_token') || hash.get('token');
+        if (at) {
+          const nextAbs = pickSafeNext(
+            url.searchParams.get('redirect_to') || url.searchParams.get('next') || hash.get('redirect_to') || hash.get('next')
+          );
+          // Build destination base (either absolute to v2 or leave as provided if it already targets v2)
+          const destBase = nextAbs
+            ? (nextAbs.startsWith('/') ? (PORTAL_V2 + nextAbs) : nextAbs)
+            : PORTAL_V2;
+          const out = new URL(destBase);
+          // Append sb token so Streamlit can mint its own session
+          if (!out.searchParams.get('sb')) out.searchParams.set('sb', at);
+          window.location.replace(out.toString());
+          return;
         }
-        return;
       }
 
       // 4) Error cases from Supabase
